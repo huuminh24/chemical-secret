@@ -1,20 +1,17 @@
 /* =========================================================
-   Chemical Secret — Reader + Audio + Freehand Highlight
-   Pure static, no backend. Files served from same origin.
+   Chemical Secret — Reader + Audio + Rectangle Highlight
    ========================================================= */
 (function () {
   "use strict";
 
   const PDF_URL = "assets/Chemical-Secret.pdf";
   const TRACK_COUNT = 12;
+  const HL_ALPHA = 0.35;
 
   /* ---------- pdf.js setup ---------- */
   const pdfjsLib = window["pdfjsLib"];
-  // No workerSrc -> pdf.js uses the main-thread "fake worker" (works even where
-  // Web Workers are disabled). Slightly slower, but reliable everywhere.
   if (pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = "";
 
-  /* ---------- DOM ---------- */
   const $ = (id) => document.getElementById(id);
   const viewport = $("pdfViewport");
   const pdfScroll = $("pdfScroll");
@@ -27,13 +24,12 @@
   const rendered = new Set();
 
   /* =========================================================
-     PDF RENDERING (with highlight overlay per page)
+     PDF RENDERING
      ========================================================= */
   function computeScale(page) {
     if (fitWidth.checked) {
       const avail = pdfScroll.clientWidth - 36;
-      const base = page.getViewport({ scale: 1 }).width;
-      return Math.max(0.3, avail / base);
+      return Math.max(0.3, avail / page.getViewport({ scale: 1 }).width);
     }
     return currentScale;
   }
@@ -44,44 +40,53 @@
     const page = await pdfDoc.getPage(num);
     const scale = computeScale(page);
     const vport = page.getViewport({ scale });
-
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
+    const cssW = Math.floor(vport.width);
+    const cssH = Math.floor(vport.height);
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(vport.width * dpr);
-    canvas.height = Math.floor(vport.height * dpr);
-    canvas.style.width = Math.floor(vport.width) + "px";
-    canvas.style.height = Math.floor(vport.height) + "px";
-    await page.render({ canvasContext: ctx, viewport: vport, transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0] }).promise;
 
-    const overlay = document.createElement("canvas");
-    overlay.className = "hl-overlay";
-    overlay.style.pointerEvents = hlOn ? "auto" : "none";
+    /* --- PDF canvas --- */
+    const pdfCanvas = document.createElement("canvas");
+    pdfCanvas.className = "pdf-canvas";
+    pdfCanvas.width = Math.floor(vport.width * dpr);
+    pdfCanvas.height = Math.floor(vport.height * dpr);
+    pdfCanvas.style.width = cssW + "px";
+    pdfCanvas.style.height = cssH + "px";
+    await page.render({
+      canvasContext: pdfCanvas.getContext("2d"),
+      viewport: vport,
+      transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0],
+    }).promise;
+
+    /* --- Highlight canvas (on top of PDF, semi-transparent rects) --- */
+    const hlCanvas = document.createElement("canvas");
+    hlCanvas.className = "hl-canvas";
+    hlCanvas.width = cssW * dpr;
+    hlCanvas.height = cssH * dpr;
+    hlCanvas.style.width = cssW + "px";
+    hlCanvas.style.height = cssH + "px";
+
+    /* --- Interaction layer (transparent, captures mouse) --- */
+    const hlDiv = document.createElement("div");
+    hlDiv.className = "hl-interaction";
 
     wrap.innerHTML = "";
-    wrap.style.width = Math.floor(vport.width) + "px";
-    wrap.style.height = Math.floor(vport.height) + "px";
-    wrap.appendChild(canvas);
-    wrap.appendChild(overlay);
-    attachHl(overlay, num);
+    wrap.style.width = cssW + "px";
+    wrap.style.height = cssH + "px";
+    wrap.appendChild(pdfCanvas);
+    wrap.appendChild(hlCanvas);
+    wrap.appendChild(hlDiv);
     rendered.add(num);
 
-    const arr = await ensureHl(num);
-    redrawHl(overlay, arr);
+    drawHlPage(num, hlCanvas);
+    attachHlDrag(num, hlCanvas, hlDiv, cssW, cssH, dpr);
   }
 
-  function clearRendered() {
-    rendered.clear();
-    [...viewport.children].forEach((wrap) => {
-      if (wrap.classList.contains("page-wrap")) wrap.innerHTML = "";
-    });
-    renderVisible();
-  }
-
+  /* ---------- render visibility (scroll-based, concurrency-limited) ---------- */
   let renderQueued = false;
   const renderQueue = [];
   let rendering = 0;
   const MAX_RENDER = 3;
+
   function enqueueRender(wrap) {
     const num = parseInt(wrap.dataset.page, 10);
     if (rendered.has(num) || renderQueue.includes(wrap)) return;
@@ -90,9 +95,9 @@
   }
   function pumpRender() {
     while (rendering < MAX_RENDER && renderQueue.length) {
-      const wrap = renderQueue.shift();
+      const w = renderQueue.shift();
       rendering++;
-      Promise.resolve(renderPage(wrap)).finally(() => { rendering--; pumpRender(); });
+      Promise.resolve(renderPage(w)).finally(() => { rendering--; pumpRender(); });
     }
   }
   function renderVisible() {
@@ -102,8 +107,12 @@
       if (r.bottom >= rootRect.top - 400 && r.top <= rootRect.bottom + 400) enqueueRender(w);
     });
   }
+  function clearRendered() {
+    rendered.clear();
+    [...viewport.children].forEach((w) => { if (w.classList.contains("page-wrap")) w.innerHTML = ""; });
+    renderVisible();
+  }
 
-  let lastVisiblePage = 1;
   pdfScroll.addEventListener("scroll", () => {
     const wraps = [...viewport.querySelectorAll(".page-wrap")];
     const top = pdfScroll.scrollTop + 80;
@@ -117,6 +126,7 @@
       requestAnimationFrame(() => { renderQueued = false; renderVisible(); });
     }
   });
+  let lastVisiblePage = 1;
 
   async function initPdf() {
     pdfDoc = await pdfjsLib.getDocument(PDF_URL).promise;
@@ -132,15 +142,18 @@
     requestAnimationFrame(renderVisible);
   }
 
+  fitWidth.checked = true;
+  window.addEventListener("resize", () => { if (fitWidth.checked) { clearTimeout(window.__rt); window.__rt = setTimeout(clearRendered, 200); } });
+  window.addEventListener("load", () => { if (fitWidth.checked) clearRendered(); });
   zoomSel.addEventListener("change", () => { currentScale = parseFloat(zoomSel.value); clearRendered(); });
   fitWidth.addEventListener("change", clearRendered);
   $("nextPage").addEventListener("click", () => {
-    const wrap = viewport.querySelector(`.page-wrap[data-page="${lastVisiblePage + 1}"]`);
-    if (wrap) wrap.scrollIntoView({ behavior: "smooth", block: "start" });
+    const w = viewport.querySelector('.page-wrap[data-page="' + (lastVisiblePage + 1) + '"]');
+    if (w) w.scrollIntoView({ behavior: "smooth", block: "start" });
   });
   $("prevPage").addEventListener("click", () => {
-    const wrap = viewport.querySelector(`.page-wrap[data-page="${Math.max(1, lastVisiblePage - 1)}"]`);
-    if (wrap) wrap.scrollIntoView({ behavior: "smooth", block: "start" });
+    const w = viewport.querySelector('.page-wrap[data-page="' + Math.max(1, lastVisiblePage - 1) + '"]');
+    if (w) w.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
   /* =========================================================
@@ -156,7 +169,7 @@
       const item = document.createElement("div");
       item.className = "track-item";
       item.dataset.track = i;
-      item.innerHTML = `<span class="num">${i}</span><span>Track ${String(i).padStart(2, "0")}</span>`;
+      item.innerHTML = '<span class="num">' + i + '</span><span>Track ' + String(i).padStart(2, "0") + "</span>";
       item.addEventListener("click", () => loadTrack(i, true));
       tracklist.appendChild(item);
     }
@@ -188,118 +201,112 @@
   $("seek").addEventListener("input", (e) => { if (audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration; });
 
   /* =========================================================
-     FREEHAND HIGHLIGHT
+     RECTANGLE HIGHLIGHT
      ========================================================= */
   let hlOn = false;
   let hlColor = "#FFE45C";
-  let hlSize = 18;
-  const hlStrokes = new Map();   // pageNum -> [{color,width,points:[{x,y}...]}]  (normalized 0..1)
-  const hlLoaded = new Set();
 
-  const idb = (() => new Promise((resolve) => {
-    let settled = false;
-    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
-    try {
-      if (typeof indexedDB === "undefined") return finish(null);
-      const req = indexedDB.open("cs_hl", 1);
-      req.onupgradeneeded = () => req.result.createObjectStore("hl", { keyPath: "k" });
-      req.onsuccess = () => finish(req.result);
-      req.onerror = () => finish(null);
-      req.onblocked = () => finish(null);
-      setTimeout(() => finish(null), 3000);
-    } catch (e) { finish(null); }
-  }))();
+  function hlKey(num) { return "cs_hl_" + num; }
+  function loadHl(num) {
+    try { return JSON.parse(localStorage.getItem(hlKey(num))) || []; } catch { return []; }
+  }
+  function saveHl(num, arr) { localStorage.setItem(hlKey(num), JSON.stringify(arr)); }
 
-  async function idbGet(k) {
-    const db = await idb; if (!db) return null;
-    return new Promise((res) => { const t = db.transaction("hl", "readonly").objectStore("hl").get(k); t.onsuccess = () => res(t.result); t.onerror = () => res(null); });
-  }
-  async function idbSet(k, v) {
-    const db = await idb; if (!db) return;
-    return new Promise((res) => { const t = db.transaction("hl", "readwrite").objectStore("hl").put({ k, ...v }); t.onsuccess = () => res(); t.onerror = () => res(); });
-  }
-  async function idbClearAll() {
-    const db = await idb; if (!db) return;
-    return new Promise((res) => { const t = db.transaction("hl", "readwrite").objectStore("hl").clear(); t.onsuccess = () => res(); t.onerror = () => res(); });
-  }
-
-  async function ensureHl(num) {
-    if (hlLoaded.has(num)) return hlStrokes.get(num) || [];
-    const data = await idbGet("hl_" + num);
-    const arr = data ? data.strokes : [];
-    hlStrokes.set(num, arr);
-    hlLoaded.add(num);
-    return arr;
-  }
-  function saveHl(num) { idbSet("hl_" + num, { strokes: hlStrokes.get(num) || [] }); }
-
-  function drawSeg(ctx, W, H, a, b, color, width) {
-    ctx.globalAlpha = 0.45;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = width * (window.devicePixelRatio || 1);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(a.x * W, a.y * H);
-    ctx.lineTo(b.x * W, b.y * H);
-    ctx.stroke();
+  function drawHlPage(num, hlCanvas) {
+    const ctx = hlCanvas.getContext("2d");
+    const W = hlCanvas.width, H = hlCanvas.height;
+    ctx.clearRect(0, 0, W, H);
+    const rects = loadHl(num);
+    rects.forEach((r) => {
+      ctx.globalAlpha = HL_ALPHA;
+      ctx.fillStyle = r.color;
+      const x = Math.min(r.x1, r.x2) * W;
+      const y = Math.min(r.y1, r.y2) * H;
+      const w = Math.abs(r.x2 - r.x1) * W;
+      const h = Math.abs(r.y2 - r.y1) * H;
+      ctx.fillRect(x, y, w, h);
+    });
     ctx.globalAlpha = 1;
   }
-  function redrawHl(overlay, arr) {
-    const ctx = overlay.getContext("2d");
-    const W = overlay.width, H = overlay.height;
-    ctx.clearRect(0, 0, W, H);
-    (arr || []).forEach((s) => {
-      for (let i = 1; i < s.points.length; i++) drawSeg(ctx, W, H, s.points[i - 1], s.points[i], s.color, s.width);
-    });
-  }
 
-  function normPoint(e, overlay) {
-    const r = overlay.getBoundingClientRect();
-    let x = (e.clientX - r.left) / r.width;
-    let y = (e.clientY - r.top) / r.height;
-    x = Math.max(0, Math.min(1, x));
-    y = Math.max(0, Math.min(1, y));
-    return { x, y };
-  }
+  function attachHlDrag(num, hlCanvas, hlDiv, cssW, cssH, dpr) {
+    let dragging = false, startPx = null, startPy = null;
+    const ctx = hlCanvas.getContext("2d");
 
-  function attachHl(overlay, num) {
-    let drawing = false, last = null, current = null;
-    overlay.addEventListener("pointerdown", (e) => {
+    hlDiv.addEventListener("pointerdown", (e) => {
       if (!hlOn) return;
       e.preventDefault();
-      drawing = true;
-      try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
-      if (!hlStrokes.has(num)) hlStrokes.set(num, []);
-      const p = normPoint(e, overlay);
-      current = { color: hlColor, width: hlSize, points: [p] };
-      hlStrokes.get(num).push(current);
-      last = p;
+      dragging = true;
+      const r = hlDiv.getBoundingClientRect();
+      startPx = (e.clientX - r.left) / r.width;
+      startPy = (e.clientY - r.top) / r.height;
+      try { hlDiv.setPointerCapture(e.pointerId); } catch (_) {}
     });
-    overlay.addEventListener("pointermove", (e) => {
-      if (!drawing) return;
+
+    hlDiv.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
       e.preventDefault();
-      const p = normPoint(e, overlay);
-      const ctx = overlay.getContext("2d");
-      drawSeg(ctx, overlay.width, overlay.height, last, p, current.color, current.width);
-      current.points.push(p);
-      last = p;
+      const r = hlDiv.getBoundingClientRect();
+      const curX = (e.clientX - r.left) / r.width;
+      const curY = (e.clientY - r.top) / r.height;
+
+      /* redraw all saved rects + preview */
+      const W = hlCanvas.width, H = hlCanvas.height;
+      ctx.clearRect(0, 0, W, H);
+      const saved = loadHl(num);
+      saved.forEach((s) => {
+        ctx.globalAlpha = HL_ALPHA;
+        ctx.fillStyle = s.color;
+        const x = Math.min(s.x1, s.x2) * W;
+        const y = Math.min(s.y1, s.y2) * H;
+        const w = Math.abs(s.x2 - s.x1) * W;
+        const h = Math.abs(s.y2 - s.y1) * H;
+        ctx.fillRect(x, y, w, h);
+      });
+      /* preview rectangle (dashed border) */
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = hlColor;
+      ctx.lineWidth = 2 * dpr;
+      ctx.setLineDash([6 * dpr, 4 * dpr]);
+      const px = Math.min(startPx, curX) * W;
+      const py = Math.min(startPy, curY) * H;
+      const pw = Math.abs(curX - startPx) * W;
+      const ph = Math.abs(curY - startPy) * H;
+      ctx.strokeRect(px, py, pw, ph);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     });
-    const end = () => { if (drawing) { drawing = false; saveHl(num); } };
-    overlay.addEventListener("pointerup", end);
-    overlay.addEventListener("pointercancel", end);
+
+    const endDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      const r = hlDiv.getBoundingClientRect();
+      const endX = (e.clientX - r.left) / r.width;
+      const endY = (e.clientY - r.top) / r.height;
+      /* ignore tiny accidental clicks */
+      if (Math.abs(endX - startPx) < 0.005 && Math.abs(endY - startPy) < 0.005) {
+        drawHlPage(num, hlCanvas);
+        return;
+      }
+      const saved = loadHl(num);
+      saved.push({ color: hlColor, x1: startPx, y1: startPy, x2: endX, y2: endY });
+      saveHl(num, saved);
+      drawHlPage(num, hlCanvas);
+    };
+    hlDiv.addEventListener("pointerup", endDrag);
+    hlDiv.addEventListener("pointercancel", endDrag);
   }
 
   /* ---------- highlight toolbar ---------- */
   function setHlMode(on) {
     hlOn = on;
     document.body.classList.toggle("hl-on", on);
-    document.querySelectorAll(".hl-overlay").forEach((o) => (o.style.pointerEvents = on ? "auto" : "none"));
     const btn = $("hlToggle");
     btn.textContent = on ? "✏️ Highlight: ON" : "✏️ Highlight: OFF";
     btn.classList.toggle("active", on);
   }
   $("hlToggle").addEventListener("click", () => setHlMode(!hlOn));
+
   document.querySelectorAll("#swatches .swatch").forEach((s) => {
     s.addEventListener("click", () => {
       document.querySelectorAll("#swatches .swatch").forEach((x) => x.classList.remove("active"));
@@ -307,20 +314,18 @@
       hlColor = s.dataset.color;
     });
   });
-  $("hlSize").addEventListener("change", (e) => (hlSize = parseFloat(e.target.value)));
+
   $("clearPage").addEventListener("click", () => {
-    const wrap = viewport.querySelector(`.page-wrap[data-page="${lastVisiblePage}"]`);
-    if (!wrap) return;
-    hlStrokes.set(lastVisiblePage, []);
-    const ov = wrap.querySelector(".hl-overlay");
-    if (ov) ov.getContext("2d").clearRect(0, 0, ov.width, ov.height);
-    saveHl(lastVisiblePage);
+    saveHl(lastVisiblePage, []);
+    const w = viewport.querySelector('.page-wrap[data-page="' + lastVisiblePage + '"]');
+    const c = w?.querySelector(".hl-canvas");
+    if (c) c.getContext("2d").clearRect(0, 0, c.width, c.height);
     toast("Cleared page " + lastVisiblePage);
   });
+
   $("clearAll").addEventListener("click", () => {
-    hlStrokes.clear(); hlLoaded.clear();
-    document.querySelectorAll(".hl-overlay").forEach((o) => o.getContext("2d").clearRect(0, 0, o.width, o.height));
-    idbClearAll();
+    for (let i = 1; i <= 79; i++) localStorage.removeItem(hlKey(i));
+    document.querySelectorAll(".hl-canvas").forEach((c) => c.getContext("2d").clearRect(0, 0, c.width, c.height));
     toast("Cleared all highlights");
   });
 
@@ -328,18 +333,17 @@
   let toastTimer = null;
   function toast(msg) {
     const el = $("toast");
-    el.textContent = msg; el.classList.remove("hidden");
+    el.textContent = msg;
+    el.classList.remove("hidden");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.add("hidden"), 2200);
   }
 
   /* ---------- boot ---------- */
-  fitWidth.checked = true;
-  window.addEventListener("resize", () => { if (fitWidth.checked) { clearTimeout(window.__rt); window.__rt = setTimeout(clearRendered, 200); } });
-  window.addEventListener("load", () => { if (fitWidth.checked) clearRendered(); });
-
   buildTracklist();
-  initPdf().catch((e) => { viewport.innerHTML = '<div style="color:#fff;padding:30px">Failed to load PDF: ' + e.message + "</div>"; });
+  initPdf().catch((e) => {
+    viewport.innerHTML = '<div style="color:#fff;padding:30px">Failed to load PDF: ' + e.message + "</div>";
+  });
   loadTrack(1, false);
   const tryAuto = () => { audio.play().catch(() => {}); document.removeEventListener("click", tryAuto); document.removeEventListener("keydown", tryAuto); };
   document.addEventListener("click", tryAuto);
