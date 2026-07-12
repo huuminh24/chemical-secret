@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Chemical Secret · Reader + Audio + Migaku Mining</title>
+  <title>Chemical Secret · Reader + Audio + Highlight</title>
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -13,16 +13,11 @@
       <span class="logo-dot"></span>
       <div>
         <h1>Chemical Secret</h1>
-        <p class="sub">Oxford Bookworms · Read · Listen · Mine</p>
+        <p class="sub">Oxford Bookworms · Read · Listen · Highlight</p>
       </div>
     </div>
-    <nav class="tabs">
-      <button class="tab active" data-view="read">Read</button>
-      <button class="tab" data-view="mined">Mined (<span id="minedCount">0</span>)</button>
-    </nav>
   </header>
 
-  <!-- READ VIEW -->
   <main id="view-read" class="view active">
     <section class="pdf-pane">
       <div class="pdf-toolbar">
@@ -41,7 +36,6 @@
         <label class="fit">
           <input type="checkbox" id="fitWidth" checked /> Fit width
         </label>
-        <span id="ocrStatus" class="ocr-status"></span>
       </div>
       <div id="pdfScroll" class="pdf-scroll">
         <div id="pdfViewport" class="pdf-viewport">
@@ -51,6 +45,36 @@
     </section>
 
     <aside class="side-pane">
+      <!-- HIGHLIGHT TOOLS -->
+      <div class="card hl-card">
+        <h3>Highlight</h3>
+        <div class="hl-row">
+          <button id="hlToggle" class="btn-ghost">✏️ Highlight: OFF</button>
+        </div>
+        <div class="hl-row">
+          <span class="hl-label">Color</span>
+          <div class="swatches" id="swatches">
+            <button class="swatch active" data-color="#FFE45C" style="background:#FFE45C"></button>
+            <button class="swatch" data-color="#FF385C" style="background:#FF385C"></button>
+            <button class="swatch" data-color="#5BC8FF" style="background:#5BC8FF"></button>
+            <button class="swatch" data-color="#7BE37B" style="background:#7BE37B"></button>
+          </div>
+        </div>
+        <div class="hl-row">
+          <span class="hl-label">Size</span>
+          <select id="hlSize">
+            <option value="10">Thin</option>
+            <option value="18" selected>Medium</option>
+            <option value="28">Thick</option>
+          </select>
+        </div>
+        <div class="hl-row">
+          <button id="clearPage" class="btn-ghost small">Clear this page</button>
+          <button id="clearAll" class="btn-ghost small danger">Clear all</button>
+        </div>
+        <p class="hl-hint">Turn highlight ON, then drag the mouse over the book to mark text.</p>
+      </div>
+
       <!-- AUDIO -->
       <div class="card audio-card">
         <div class="audio-head">
@@ -79,46 +103,12 @@
         </div>
         <div class="tracklist" id="tracklist"></div>
       </div>
-
-      <!-- MINING HELP -->
-      <div class="card hint-card">
-        <h3>How to mine (Migaku style)</h3>
-        <p>Click any <b>word</b> in the book to pop up its definition. Hit <b>Mine</b> to save it to Anki (export <code>.txt</code> or send via AnkiConnect). The book text is real, so the <b>Migaku browser extension</b> also works here.</p>
-      </div>
     </aside>
   </main>
-
-  <!-- MINED VIEW -->
-  <main id="view-mined" class="view">
-    <div class="mined-toolbar">
-      <button id="exportAnki" class="btn-primary">⬇ Export Anki (.txt)</button>
-      <button id="sendAnkiConnect" class="btn-ghost">➤ Send to Anki (AnkiConnect)</button>
-      <button id="clearMined" class="btn-ghost danger">Clear all</button>
-    </div>
-    <div id="minedList" class="mined-list"></div>
-  </main>
-
-  <!-- MINING POPUP -->
-  <div id="minePopup" class="mine-popup hidden">
-    <div class="mp-word">
-      <span id="mpWord">word</span>
-      <button id="mpClose" class="mp-close" title="Close">×</button>
-    </div>
-    <div id="mpDef" class="mp-def">Loading definition…</div>
-    <div class="mp-sentence">
-      <div class="mp-label">Sentence</div>
-      <div id="mpSentence" class="mp-sentence-text"></div>
-    </div>
-    <div class="mp-actions">
-      <button id="mpMine" class="btn-primary">★ Mine</button>
-      <button id="mpCopy" class="btn-ghost">Copy</button>
-    </div>
-  </div>
 
   <div id="toast" class="toast hidden"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.3/dist/tesseract.min.js"></script>
-  <script src="js/app.js?v=5"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 /* =========================================================
-   Chemical Secret — Reader + Audio + Migaku-style mining
+   Chemical Secret — Reader + Audio + Freehand Highlight
    Pure static, no backend. Files served from same origin.
    ========================================================= */
 (function () {
@@ -7,7 +7,6 @@
 
   const PDF_URL = "assets/Chemical-Secret.pdf";
   const TRACK_COUNT = 12;
-  const MINED_KEY = "cs_mined_v1";
 
   /* ---------- pdf.js setup ---------- */
   const pdfjsLib = window["pdfjsLib"];
@@ -27,11 +26,11 @@
   const rendered = new Set();
 
   /* =========================================================
-     PDF RENDERING
+     PDF RENDERING (with highlight overlay per page)
      ========================================================= */
   function computeScale(page) {
     if (fitWidth.checked) {
-      const avail = pdfScroll.clientWidth - 36; // padding
+      const avail = pdfScroll.clientWidth - 36;
       const base = page.getViewport({ scale: 1 }).width;
       return Math.max(0.3, avail / base);
     }
@@ -52,143 +51,28 @@
     canvas.height = Math.floor(vport.height * dpr);
     canvas.style.width = Math.floor(vport.width) + "px";
     canvas.style.height = Math.floor(vport.height) + "px";
-
     await page.render({ canvasContext: ctx, viewport: vport, transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0] }).promise;
 
-    const ocrDiv = document.createElement("div");
-    ocrDiv.className = "ocr-layer";
+    const overlay = document.createElement("canvas");
+    overlay.className = "hl-overlay";
+    overlay.style.pointerEvents = hlOn ? "auto" : "none";
 
     wrap.innerHTML = "";
     wrap.style.width = Math.floor(vport.width) + "px";
     wrap.style.height = Math.floor(vport.height) + "px";
     wrap.appendChild(canvas);
-    wrap.appendChild(ocrDiv);
+    wrap.appendChild(overlay);
+    attachHl(overlay, num);
     rendered.add(num);
 
-    // This PDF is image-only (no embedded text) → OCR each page so words are selectable.
-    ocrPage(num, canvas, ocrDiv);
-  }
-
-  /* =========================================================
-     OCR LAYER (Tesseract.js) — makes words clickable for mining
-     Cached in IndexedDB so revisits are instant.
-     ========================================================= */
-  const ocrText = new Map(); // pageNum -> full recognized text
-  const ocrDone = new Set();
-  let ocrWorker = null;
-
-  function setOcrStatus(msg) {
-    const el = $("ocrStatus");
-    if (el) el.textContent = msg || "";
-  }
-
-  /* ---------- IndexedDB cache (non-blocking; falls back to live OCR) ---------- */
-  const idb = (() => {
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
-      try {
-        if (typeof indexedDB === "undefined") return finish(null);
-        const req = indexedDB.open("cs_ocr", 1);
-        req.onupgradeneeded = () => req.result.createObjectStore("pages", { keyPath: "page" });
-        req.onsuccess = () => finish(req.result);
-        req.onerror = () => finish(null);
-        req.onblocked = () => finish(null);
-        setTimeout(() => finish(null), 3000); // don't let a broken IDB block OCR
-      } catch (e) { finish(null); }
-    });
-  })();
-  async function idbGet(page) {
-    const db = await idb;
-    if (!db) return null;
-    return new Promise((resolve) => {
-      const tx = db.transaction("pages", "readonly").objectStore("pages").get(page);
-      tx.onsuccess = () => resolve(tx.result || null);
-      tx.onerror = () => resolve(null);
-    });
-  }
-  async function idbSet(page, val) {
-    const db = await idb;
-    if (!db) return;
-    return new Promise((resolve) => {
-      const tx = db.transaction("pages", "readwrite").objectStore("pages").put({ page, ...val });
-      tx.onsuccess = () => resolve();
-      tx.onerror = () => resolve();
-    });
-  }
-
-  async function getWorker() {
-    if (ocrWorker) return ocrWorker;
-    setOcrStatus("Loading OCR engine…");
-    ocrWorker = await Tesseract.createWorker();
-    await ocrWorker.load();
-    await ocrWorker.loadLanguage("eng");
-    await ocrWorker.initialize("eng");
-    setOcrStatus("");
-    return ocrWorker;
-  }
-
-  async function ocrPage(num, canvas, ocrDiv) {
-    if (ocrDone.has(num)) { buildOcrLayer(num, canvas, ocrDiv); return; }
-    const badge = document.createElement("div");
-    badge.className = "ocr-badge";
-    badge.textContent = "OCR…";
-    ocrDiv.appendChild(badge);
-
-    let data = await idbGet(num);
-    if (!data) {
-      try {
-        const worker = await getWorker();
-        setOcrStatus("OCR page " + num + "…");
-        const res = await worker.recognize(canvas);
-        setOcrStatus("");
-        data = { text: res.data.text || "", words: (res.data.words || []).map((w) => ({
-          t: w.text, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1,
-        })) };
-        await idbSet(num, data);
-      } catch (e) {
-        badge.textContent = "OCR failed";
-        return;
-      }
-    }
-    ocrText.set(num, data.text || "");
-    ocrDiv._words = data.words || [];
-    ocrDone.add(num);
-    badge.remove();
-    setOcrStatus("");
-    buildOcrLayer(num, canvas, ocrDiv);
-  }
-
-  function buildOcrLayer(num, canvas, ocrDiv) {
-    if (ocrDiv.dataset.built === "1") return;
-    const words = ocrDiv._words || [];
-    const cssW = parseFloat(canvas.style.width) || canvas.width;
-    const cssH = parseFloat(canvas.style.height) || canvas.height;
-    const sx = cssW / canvas.width;
-    const sy = cssH / canvas.height;
-    const frag = document.createDocumentFragment();
-    words.forEach((w) => {
-      if (!w.t || !w.t.trim()) return;
-      const s = document.createElement("span");
-      s.className = "ocr-word";
-      s.textContent = w.t;
-      s.dataset.word = w.t;
-      s.style.left = w.x0 * sx + "px";
-      s.style.top = w.y0 * sy + "px";
-      s.style.width = Math.max(2, (w.x1 - w.x0) * sx) + "px";
-      s.style.height = Math.max(2, (w.y1 - w.y0) * sy) + "px";
-      frag.appendChild(s);
-    });
-    ocrDiv.appendChild(frag);
-    ocrDiv.dataset.built = "1";
+    const arr = await ensureHl(num);
+    redrawHl(overlay, arr);
   }
 
   function clearRendered() {
     rendered.clear();
     [...viewport.children].forEach((wrap) => {
-      if (wrap.classList.contains("page-wrap")) {
-        wrap.innerHTML = "";
-      }
+      if (wrap.classList.contains("page-wrap")) wrap.innerHTML = "";
     });
     observePages();
   }
@@ -199,10 +83,7 @@
     io = new IntersectionObserver(
       (entries) => {
         entries.forEach((e) => {
-          if (e.isIntersecting) {
-            renderPage(e.target);
-            io.unobserve(e.target);
-          }
+          if (e.isIntersecting) { renderPage(e.target); io.unobserve(e.target); }
         });
       },
       { root: pdfScroll, rootMargin: "300px 0px" }
@@ -237,10 +118,7 @@
     observePages();
   }
 
-  zoomSel.addEventListener("change", () => {
-    currentScale = parseFloat(zoomSel.value);
-    clearRendered();
-  });
+  zoomSel.addEventListener("change", () => { currentScale = parseFloat(zoomSel.value); clearRendered(); });
   fitWidth.addEventListener("change", clearRendered);
   $("nextPage").addEventListener("click", () => {
     const wrap = viewport.querySelector(`.page-wrap[data-page="${lastVisiblePage + 1}"]`);
@@ -269,268 +147,188 @@
       tracklist.appendChild(item);
     }
   }
-
   function fmt(t) {
     if (!isFinite(t)) return "0:00";
-    const m = Math.floor(t / 60);
-    const s = Math.floor(t % 60);
-    return m + ":" + String(s).padStart(2, "0");
+    return Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0");
   }
-
   function loadTrack(n, autoplay) {
     currentTrack = n;
     audio.src = "assets/audio/track" + String(n).padStart(2, "0") + ".mp3";
     audio.load();
     $("trackTitle").textContent = "Track " + String(n).padStart(2, "0");
-    [...tracklist.children].forEach((c) =>
-      c.classList.toggle("active", parseInt(c.dataset.track, 10) === n)
-    );
+    [...tracklist.children].forEach((c) => c.classList.toggle("active", parseInt(c.dataset.track, 10) === n));
     if (autoplay) audio.play().catch(() => {});
   }
-
-  $("playPause").addEventListener("click", () => {
-    if (audio.paused) audio.play().catch(() => {});
-    else audio.pause();
-  });
+  $("playPause").addEventListener("click", () => { audio.paused ? audio.play().catch(() => {}) : audio.pause(); });
   $("nextTrack").addEventListener("click", () => loadTrack(Math.min(TRACK_COUNT, currentTrack + 1), true));
   $("prevTrack").addEventListener("click", () => loadTrack(Math.max(1, currentTrack - 1), true));
   $("speed").addEventListener("change", (e) => (audio.playbackRate = parseFloat(e.target.value)));
   audio.addEventListener("play", () => ($("playPause").textContent = "⏸"));
   audio.addEventListener("pause", () => ($("playPause").textContent = "▶"));
-  audio.addEventListener("ended", () => {
-    if (currentTrack < TRACK_COUNT) loadTrack(currentTrack + 1, true);
-  });
+  audio.addEventListener("ended", () => { if (currentTrack < TRACK_COUNT) loadTrack(currentTrack + 1, true); });
   audio.addEventListener("timeupdate", () => {
     $("curTime").textContent = fmt(audio.currentTime);
     if (audio.duration) $("seek").value = (audio.currentTime / audio.duration) * 100;
   });
   audio.addEventListener("loadedmetadata", () => ($("durTime").textContent = fmt(audio.duration)));
-  $("seek").addEventListener("input", (e) => {
-    if (audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration;
-  });
+  $("seek").addEventListener("input", (e) => { if (audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration; });
 
   /* =========================================================
-     MINING (Migaku-style)
+     FREEHAND HIGHLIGHT
      ========================================================= */
-  const popup = $("minePopup");
-  let activeWord = "";
-  let activeSentence = "";
+  let hlOn = false;
+  let hlColor = "#FFE45C";
+  let hlSize = 18;
+  const hlStrokes = new Map();   // pageNum -> [{color,width,points:[{x,y}...]}]  (normalized 0..1)
+  const hlLoaded = new Set();
 
-  function cleanWord(t) {
-    return (t || "").replace(/[^\p{L}\p{M}'’-]/gu, "").toLowerCase();
-  }
-
-  function sentenceAround(pageText, word) {
-    const w = cleanWord(word);
-    if (!w) return pageText.slice(0, 200);
-    const re = new RegExp(w, "i");
-    const idx = pageText.search(re);
-    if (idx < 0) return pageText.slice(0, 200);
-    const start = pageText.lastIndexOf(".", idx) + 1;
-    let end = pageText.indexOf(".", idx + w.length);
-    if (end < 0) end = pageText.length;
-    let sent = pageText.slice(start, end + 1).trim();
-    if (sent.length > 400) sent = sent.slice(0, 400) + "…";
-    return sent;
-  }
-
-  function highlight(sentence, word) {
-    const w = cleanWord(word);
-    if (!w) return sentence;
-    return sentence.replace(new RegExp("(" + w + ")", "i"), "<mark>$1</mark>");
-  }
-
-  async function fetchDef(word) {
+  const idb = (() => new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
     try {
-      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word));
-      if (!r.ok) return "(no definition found)";
-      const data = await r.json();
-      const entry = data[0];
-      let html = "";
-      if (entry.phonetic) html += `<div class="pos">/${entry.phonetic}/</div>`;
-      const meanings = entry.meanings || [];
-      meanings.slice(0, 3).forEach((m) => {
-        const def = (m.definitions && m.definitions[0] && m.definitions[0].definition) || "";
-        html += `<div><span class="pos">${m.partOfSpeech}</span> ${def}</div>`;
-      });
-      return html || "(no definition found)";
-    } catch (e) {
-      return "(offline — definition unavailable)";
-    }
+      if (typeof indexedDB === "undefined") return finish(null);
+      const req = indexedDB.open("cs_hl", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("hl", { keyPath: "k" });
+      req.onsuccess = () => finish(req.result);
+      req.onerror = () => finish(null);
+      req.onblocked = () => finish(null);
+      setTimeout(() => finish(null), 3000);
+    } catch (e) { finish(null); }
+  }))();
+
+  async function idbGet(k) {
+    const db = await idb; if (!db) return null;
+    return new Promise((res) => { const t = db.transaction("hl", "readonly").objectStore("hl").get(k); t.onsuccess = () => res(t.result); t.onerror = () => res(null); });
+  }
+  async function idbSet(k, v) {
+    const db = await idb; if (!db) return;
+    return new Promise((res) => { const t = db.transaction("hl", "readwrite").objectStore("hl").put({ k, ...v }); t.onsuccess = () => res(); t.onerror = () => res(); });
+  }
+  async function idbClearAll() {
+    const db = await idb; if (!db) return;
+    return new Promise((res) => { const t = db.transaction("hl", "readwrite").objectStore("hl").clear(); t.onsuccess = () => res(); t.onerror = () => res(); });
   }
 
-  async function openPopup(word, pageText, x, y) {
-    activeWord = cleanWord(word) || word;
-    activeSentence = sentenceAround(pageText, word);
-    $("mpWord").textContent = word;
-    $("mpSentence").innerHTML = highlight(activeSentence, word);
-    $("mpDef").textContent = "Loading definition…";
-    popup.classList.remove("hidden");
-    positionPopup(x, y);
-    const def = await fetchDef(activeWord);
-    $("mpDef").innerHTML = def;
+  async function ensureHl(num) {
+    if (hlLoaded.has(num)) return hlStrokes.get(num) || [];
+    const data = await idbGet("hl_" + num);
+    const arr = data ? data.strokes : [];
+    hlStrokes.set(num, arr);
+    hlLoaded.add(num);
+    return arr;
+  }
+  function saveHl(num) { idbSet("hl_" + num, { strokes: hlStrokes.get(num) || [] }); }
+
+  function drawSeg(ctx, W, H, a, b, color, width) {
+    ctx.globalAlpha = 0.45;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width * (window.devicePixelRatio || 1);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(a.x * W, a.y * H);
+    ctx.lineTo(b.x * W, b.y * H);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  function redrawHl(overlay, arr) {
+    const ctx = overlay.getContext("2d");
+    const W = overlay.width, H = overlay.height;
+    ctx.clearRect(0, 0, W, H);
+    (arr || []).forEach((s) => {
+      for (let i = 1; i < s.points.length; i++) drawSeg(ctx, W, H, s.points[i - 1], s.points[i], s.color, s.width);
+    });
   }
 
-  function positionPopup(x, y) {
-    const w = 320, h = popup.offsetHeight || 200;
-    let left = x + 12, top = y + 12;
-    if (left + w > window.innerWidth - 10) left = window.innerWidth - w - 10;
-    if (top + h > window.innerHeight - 10) top = y - h - 12;
-    popup.style.left = Math.max(10, left) + "px";
-    popup.style.top = Math.max(10, top) + "px";
+  function normPoint(e, overlay) {
+    const r = overlay.getBoundingClientRect();
+    let x = (e.clientX - r.left) / r.width;
+    let y = (e.clientY - r.top) / r.height;
+    x = Math.max(0, Math.min(1, x));
+    y = Math.max(0, Math.min(1, y));
+    return { x, y };
   }
 
-  viewport.addEventListener("click", (e) => {
-    const span = e.target.closest(".ocr-word");
-    if (!span) return;
-    const wrap = span.closest(".page-wrap");
+  function attachHl(overlay, num) {
+    let drawing = false, last = null, current = null;
+    overlay.addEventListener("pointerdown", (e) => {
+      if (!hlOn) return;
+      e.preventDefault();
+      drawing = true;
+      try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
+      if (!hlStrokes.has(num)) hlStrokes.set(num, []);
+      const p = normPoint(e, overlay);
+      current = { color: hlColor, width: hlSize, points: [p] };
+      hlStrokes.get(num).push(current);
+      last = p;
+    });
+    overlay.addEventListener("pointermove", (e) => {
+      if (!drawing) return;
+      e.preventDefault();
+      const p = normPoint(e, overlay);
+      const ctx = overlay.getContext("2d");
+      drawSeg(ctx, overlay.width, overlay.height, last, p, current.color, current.width);
+      current.points.push(p);
+      last = p;
+    });
+    const end = () => { if (drawing) { drawing = false; saveHl(num); } };
+    overlay.addEventListener("pointerup", end);
+    overlay.addEventListener("pointercancel", end);
+  }
+
+  /* ---------- highlight toolbar ---------- */
+  function setHlMode(on) {
+    hlOn = on;
+    document.body.classList.toggle("hl-on", on);
+    document.querySelectorAll(".hl-overlay").forEach((o) => (o.style.pointerEvents = on ? "auto" : "none"));
+    const btn = $("hlToggle");
+    btn.textContent = on ? "✏️ Highlight: ON" : "✏️ Highlight: OFF";
+    btn.classList.toggle("active", on);
+  }
+  $("hlToggle").addEventListener("click", () => setHlMode(!hlOn));
+  document.querySelectorAll("#swatches .swatch").forEach((s) => {
+    s.addEventListener("click", () => {
+      document.querySelectorAll("#swatches .swatch").forEach((x) => x.classList.remove("active"));
+      s.classList.add("active");
+      hlColor = s.dataset.color;
+    });
+  });
+  $("hlSize").addEventListener("change", (e) => (hlSize = parseFloat(e.target.value)));
+  $("clearPage").addEventListener("click", () => {
+    const wrap = viewport.querySelector(`.page-wrap[data-page="${lastVisiblePage}"]`);
     if (!wrap) return;
-    const word = span.dataset.word || span.textContent.trim();
-    if (!cleanWord(word)) return;
-    openPopup(word, ocrText.get(parseInt(wrap.dataset.page, 10)) || "", e.clientX, e.clientY);
+    hlStrokes.set(lastVisiblePage, []);
+    const ov = wrap.querySelector(".hl-overlay");
+    if (ov) ov.getContext("2d").clearRect(0, 0, ov.width, ov.height);
+    saveHl(lastVisiblePage);
+    toast("Cleared page " + lastVisiblePage);
   });
-  $("mpClose").addEventListener("click", () => popup.classList.add("hidden"));
-  document.addEventListener("click", (e) => {
-    if (!popup.contains(e.target) && !e.target.closest(".ocr-word")) popup.classList.add("hidden");
+  $("clearAll").addEventListener("click", () => {
+    hlStrokes.clear(); hlLoaded.clear();
+    document.querySelectorAll(".hl-overlay").forEach((o) => o.getContext("2d").clearRect(0, 0, o.width, o.height));
+    idbClearAll();
+    toast("Cleared all highlights");
   });
-
-  /* ---------- storage + export ---------- */
-  function getMined() {
-    try { return JSON.parse(localStorage.getItem(MINED_KEY)) || []; } catch { return []; }
-  }
-  function saveMined(arr) {
-    localStorage.setItem(MINED_KEY, JSON.stringify(arr));
-    $("minedCount").textContent = arr.length;
-  }
-  function renderMined() {
-    const arr = getMined();
-    const list = $("minedList");
-    list.innerHTML = "";
-    arr.slice().reverse().forEach((m) => {
-      const c = document.createElement("div");
-      c.className = "mined-card";
-      c.innerHTML =
-        `<div class="w">${esc(m.word)}</div>` +
-        `<div class="s">${esc(m.sentence)}</div>` +
-        `<div class="d">${m.def ? esc(m.def.replace(/<[^>]+>/g, "")) : ""}</div>` +
-        `<div class="meta">Track ${m.track} · p.${m.page} · ${new Date(m.ts).toLocaleString()}</div>`;
-      list.appendChild(c);
-    });
-  }
-  function esc(s) {
-    return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-  }
-
-  $("mpMine").addEventListener("click", () => {
-    const arr = getMined();
-    arr.push({
-      word: activeWord,
-      sentence: activeSentence,
-      def: $("mpDef").textContent,
-      track: currentTrack,
-      page: lastVisiblePage,
-      ts: Date.now(),
-    });
-    saveMined(arr);
-    toast("Mined: " + activeWord);
-    popup.classList.add("hidden");
-  });
-  $("mpCopy").addEventListener("click", () => {
-    const text = activeWord + " — " + activeSentence;
-    navigator.clipboard?.writeText(text);
-    toast("Copied");
-  });
-
-  $("exportAnki").addEventListener("click", () => {
-    const arr = getMined();
-    if (!arr.length) return toast("Nothing mined yet");
-    const lines = arr.map((m) =>
-      [m.word, m.sentence, m.def ? m.def.replace(/<[^>]+>/g, " ").replace(/\t/g, " ") : "", "ChemicalSecret"].join("\t")
-    );
-    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "chemical-secret-mined.txt";
-    a.click();
-    toast("Exported " + arr.length + " cards");
-  });
-
-  $("sendAnkiConnect").addEventListener("click", async () => {
-    const arr = getMined();
-    if (!arr.length) return toast("Nothing mined yet");
-    let ok = 0;
-    for (const m of arr) {
-      const note = {
-        deckName: "Chemical Secret",
-        modelName: "Basic",
-        fields: { Front: m.word, Back: m.def + "<br><br>" + m.sentence },
-        tags: ["ChemicalSecret", "track" + m.track],
-      };
-      try {
-        const r = await fetch("http://localhost:8765", {
-          method: "POST",
-          body: JSON.stringify({ action: "addNote", version: 6, params: { note } }),
-        });
-        const j = await r.json();
-        if (j.error === null) ok++;
-      } catch (e) { /* AnkiConnect not running */ }
-    }
-    toast(ok ? "Sent " + ok + " cards to Anki" : "AnkiConnect not running (open Anki first)");
-  });
-
-  $("clearMined").addEventListener("click", () => {
-    if (confirm("Clear all mined cards?")) { saveMined([]); renderMined(); }
-  });
-
-  /* ---------- tabs ---------- */
-  document.querySelectorAll(".tab").forEach((t) =>
-    t.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-      document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-      t.classList.add("active");
-      $("view-" + t.dataset.view).classList.add("active");
-      if (t.dataset.view === "mined") renderMined();
-    })
-  );
 
   /* ---------- toast ---------- */
   let toastTimer = null;
   function toast(msg) {
     const el = $("toast");
-    el.textContent = msg;
-    el.classList.remove("hidden");
+    el.textContent = msg; el.classList.remove("hidden");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.add("hidden"), 2200);
   }
 
-  /* ---------- robust fit-to-width (override form restoration) ---------- */
+  /* ---------- boot ---------- */
   fitWidth.checked = true;
-  let resizeTimer = null;
-  window.addEventListener("resize", () => {
-    if (!fitWidth.checked) return;
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(clearRendered, 200);
-  });
-  // Re-fit once layout + pdf.js are fully ready (avoids early wrong measurement)
+  window.addEventListener("resize", () => { if (fitWidth.checked) { clearTimeout(window.__rt); window.__rt = setTimeout(clearRendered, 200); } });
   window.addEventListener("load", () => { if (fitWidth.checked) clearRendered(); });
 
-  /* =========================================================
-     BOOT — auto open PDF + audio (per request)
-     ========================================================= */
   buildTracklist();
-  saveMined(getMined());
-  initPdf().catch((e) => {
-    viewport.innerHTML = '<div style="color:#fff;padding:30px">Failed to load PDF: ' + e.message + "</div>";
-  });
-  // Auto-load audio track 1. Autoplay may be blocked until first interaction.
+  initPdf().catch((e) => { viewport.innerHTML = '<div style="color:#fff;padding:30px">Failed to load PDF: ' + e.message + "</div>"; });
   loadTrack(1, false);
-  const tryAuto = () => {
-    audio.play().catch(() => {});
-    document.removeEventListener("click", tryAuto);
-    document.removeEventListener("keydown", tryAuto);
-  };
+  const tryAuto = () => { audio.play().catch(() => {}); document.removeEventListener("click", tryAuto); document.removeEventListener("keydown", tryAuto); };
   document.addEventListener("click", tryAuto);
   document.addEventListener("keydown", tryAuto);
-  // attempt immediately too (works if browser allows)
   audio.play().catch(() => {});
 })();
