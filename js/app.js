@@ -119,12 +119,15 @@
 
   async function getWorker() {
     if (ocrWorker) return ocrWorker;
-    setOcrStatus("Loading OCR engine…");
+    setOcrStatus("[1] Loading OCR engine…");
     ocrWorker = await Tesseract.createWorker();
+    setOcrStatus("[2] createWorker ok");
     await ocrWorker.load();
+    setOcrStatus("[3] load ok");
     await ocrWorker.loadLanguage("eng");
+    setOcrStatus("[4] lang ok");
     await ocrWorker.initialize("eng");
-    setOcrStatus("");
+    setOcrStatus("[5] engine ready");
     return ocrWorker;
   }
 
@@ -135,17 +138,21 @@
     badge.textContent = "OCR…";
     ocrDiv.appendChild(badge);
 
+    setOcrStatus("[A] idbGet…");
     let data = await idbGet(num);
+    setOcrStatus("[B] idbGet=" + (data ? "cached" : "miss"));
     if (!data) {
       try {
         const worker = await getWorker();
-        setOcrStatus("OCR page " + num + "…");
+        setOcrStatus("[C] worker ready, recognizing…");
         const res = await worker.recognize(canvas);
+        setOcrStatus("[D] recognized " + (res.data.words || []).length);
         data = { text: res.data.text || "", words: (res.data.words || []).map((w) => ({
           t: w.text, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1,
         })) };
         await idbSet(num, data);
       } catch (e) {
+        setOcrStatus("[ERR] " + e.message);
         badge.textContent = "OCR failed";
         return;
       }
