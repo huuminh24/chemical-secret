@@ -10,7 +10,9 @@
 
   /* ---------- pdf.js setup ---------- */
   const pdfjsLib = window["pdfjsLib"];
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "js/pdf.worker.min.js";
+  // No workerSrc -> pdf.js uses the main-thread "fake worker" (works even where
+  // Web Workers are disabled). Slightly slower, but reliable everywhere.
+  if (pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = "";
 
   /* ---------- DOM ---------- */
   const $ = (id) => document.getElementById(id);
