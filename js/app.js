@@ -78,11 +78,27 @@
   }
 
   let renderQueued = false;
+  const renderQueue = [];
+  let rendering = 0;
+  const MAX_RENDER = 3;
+  function enqueueRender(wrap) {
+    const num = parseInt(wrap.dataset.page, 10);
+    if (rendered.has(num) || renderQueue.includes(wrap)) return;
+    renderQueue.push(wrap);
+    pumpRender();
+  }
+  function pumpRender() {
+    while (rendering < MAX_RENDER && renderQueue.length) {
+      const wrap = renderQueue.shift();
+      rendering++;
+      Promise.resolve(renderPage(wrap)).finally(() => { rendering--; pumpRender(); });
+    }
+  }
   function renderVisible() {
     const rootRect = pdfScroll.getBoundingClientRect();
     [...viewport.querySelectorAll(".page-wrap")].forEach((w) => {
       const r = w.getBoundingClientRect();
-      if (r.bottom >= rootRect.top - 400 && r.top <= rootRect.bottom + 400) renderPage(w);
+      if (r.bottom >= rootRect.top - 400 && r.top <= rootRect.bottom + 400) enqueueRender(w);
     });
   }
 
