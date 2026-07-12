@@ -78,6 +78,7 @@
   let ocrWorker = null;
 
   function setOcrStatus(msg) {
+    console.log("OCRSTATUS:", msg);
     const el = $("ocrStatus");
     if (el) el.textContent = msg || "";
   }
@@ -139,7 +140,9 @@
     ocrDiv.appendChild(badge);
 
     setOcrStatus("[A] idbGet…");
+    console.log("OCRDBG: before idbGet", num);
     let data = await idbGet(num);
+    console.log("OCRDBG: after idbGet", num, "data?", !!data);
     setOcrStatus("[B] idbGet=" + (data ? "cached" : "miss"));
     if (!data) {
       try {
