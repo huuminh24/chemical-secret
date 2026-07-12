@@ -82,13 +82,20 @@
     if (el) el.textContent = msg || "";
   }
 
-  /* ---------- IndexedDB cache ---------- */
+  /* ---------- IndexedDB cache (non-blocking; falls back to live OCR) ---------- */
   const idb = (() => {
     return new Promise((resolve) => {
-      const req = indexedDB.open("cs_ocr", 1);
-      req.onupgradeneeded = () => req.result.createObjectStore("pages", { keyPath: "page" });
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      try {
+        if (typeof indexedDB === "undefined") return finish(null);
+        const req = indexedDB.open("cs_ocr", 1);
+        req.onupgradeneeded = () => req.result.createObjectStore("pages", { keyPath: "page" });
+        req.onsuccess = () => finish(req.result);
+        req.onerror = () => finish(null);
+        req.onblocked = () => finish(null);
+        setTimeout(() => finish(null), 3000); // don't let a broken IDB block OCR
+      } catch (e) { finish(null); }
     });
   })();
   async function idbGet(page) {
