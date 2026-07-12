@@ -57,6 +57,7 @@
 
     const textDiv = document.createElement("div");
     textDiv.className = "textLayer";
+    textDiv.style.setProperty("--scale-factor", vport.scale);
     const textContent = await page.getTextContent();
     const task = pdfjsLib.renderTextLayer({
       textContentSource: textContent,
