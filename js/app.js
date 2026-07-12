@@ -74,22 +74,15 @@
     [...viewport.children].forEach((wrap) => {
       if (wrap.classList.contains("page-wrap")) wrap.innerHTML = "";
     });
-    observePages();
+    renderVisible();
   }
 
-  let io = null;
-  function observePages() {
-    if (io) io.disconnect();
-    io = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((e) => {
-          if (e.isIntersecting) { renderPage(e.target); io.unobserve(e.target); }
-        });
-      },
-      { root: pdfScroll, rootMargin: "300px 0px" }
-    );
-    [...viewport.children].forEach((c) => {
-      if (c.classList.contains("page-wrap")) io.observe(c);
+  let renderQueued = false;
+  function renderVisible() {
+    const rootRect = pdfScroll.getBoundingClientRect();
+    [...viewport.querySelectorAll(".page-wrap")].forEach((w) => {
+      const r = w.getBoundingClientRect();
+      if (r.bottom >= rootRect.top - 400 && r.top <= rootRect.bottom + 400) renderPage(w);
     });
   }
 
@@ -102,6 +95,10 @@
       else break;
     }
     pageInfo.textContent = "Page " + lastVisiblePage + " / " + pdfDoc.numPages;
+    if (!renderQueued) {
+      renderQueued = true;
+      requestAnimationFrame(() => { renderQueued = false; renderVisible(); });
+    }
   });
 
   async function initPdf() {
@@ -115,7 +112,7 @@
       wrap.style.minHeight = "400px";
       viewport.appendChild(wrap);
     }
-    observePages();
+    requestAnimationFrame(renderVisible);
   }
 
   zoomSel.addEventListener("change", () => { currentScale = parseFloat(zoomSel.value); clearRendered(); });
