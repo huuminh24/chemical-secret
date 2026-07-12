@@ -10,8 +10,7 @@
 
   /* ---------- pdf.js setup ---------- */
   const pdfjsLib = window["pdfjsLib"];
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "js/pdf.worker.min.js";
 
   /* ---------- DOM ---------- */
   const $ = (id) => document.getElementById(id);
