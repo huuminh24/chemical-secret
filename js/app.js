@@ -55,24 +55,124 @@
 
     await page.render({ canvasContext: ctx, viewport: vport, transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0] }).promise;
 
-    const textDiv = document.createElement("div");
-    textDiv.className = "textLayer";
-    textDiv.style.setProperty("--scale-factor", vport.scale);
-    const textContent = await page.getTextContent();
-    const task = pdfjsLib.renderTextLayer({
-      textContentSource: textContent,
-      container: textDiv,
-      viewport: vport,
-      textDivs: [],
-    });
-    await task.promise;
+    const ocrDiv = document.createElement("div");
+    ocrDiv.className = "ocr-layer";
 
     wrap.innerHTML = "";
     wrap.style.width = Math.floor(vport.width) + "px";
     wrap.style.height = Math.floor(vport.height) + "px";
     wrap.appendChild(canvas);
-    wrap.appendChild(textDiv);
+    wrap.appendChild(ocrDiv);
     rendered.add(num);
+
+    // This PDF is image-only (no embedded text) → OCR each page so words are selectable.
+    ocrPage(num, canvas, ocrDiv);
+  }
+
+  /* =========================================================
+     OCR LAYER (Tesseract.js) — makes words clickable for mining
+     Cached in IndexedDB so revisits are instant.
+     ========================================================= */
+  const ocrText = new Map(); // pageNum -> full recognized text
+  const ocrDone = new Set();
+  let ocrWorker = null;
+
+  function setOcrStatus(msg) {
+    const el = $("ocrStatus");
+    if (el) el.textContent = msg || "";
+  }
+
+  /* ---------- IndexedDB cache ---------- */
+  const idb = (() => {
+    return new Promise((resolve) => {
+      const req = indexedDB.open("cs_ocr", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("pages", { keyPath: "page" });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    });
+  })();
+  async function idbGet(page) {
+    const db = await idb;
+    if (!db) return null;
+    return new Promise((resolve) => {
+      const tx = db.transaction("pages", "readonly").objectStore("pages").get(page);
+      tx.onsuccess = () => resolve(tx.result || null);
+      tx.onerror = () => resolve(null);
+    });
+  }
+  async function idbSet(page, val) {
+    const db = await idb;
+    if (!db) return;
+    return new Promise((resolve) => {
+      const tx = db.transaction("pages", "readwrite").objectStore("pages").put({ page, ...val });
+      tx.onsuccess = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
+  async function getWorker() {
+    if (ocrWorker) return ocrWorker;
+    setOcrStatus("Loading OCR engine…");
+    ocrWorker = await Tesseract.createWorker();
+    await ocrWorker.load();
+    await ocrWorker.loadLanguage("eng");
+    await ocrWorker.initialize("eng");
+    setOcrStatus("");
+    return ocrWorker;
+  }
+
+  async function ocrPage(num, canvas, ocrDiv) {
+    if (ocrDone.has(num)) { buildOcrLayer(num, canvas, ocrDiv); return; }
+    const badge = document.createElement("div");
+    badge.className = "ocr-badge";
+    badge.textContent = "OCR…";
+    ocrDiv.appendChild(badge);
+
+    let data = await idbGet(num);
+    if (!data) {
+      try {
+        const worker = await getWorker();
+        setOcrStatus("OCR page " + num + "…");
+        const res = await worker.recognize(canvas);
+        data = { text: res.data.text || "", words: (res.data.words || []).map((w) => ({
+          t: w.text, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1,
+        })) };
+        await idbSet(num, data);
+      } catch (e) {
+        badge.textContent = "OCR failed";
+        return;
+      }
+    }
+    ocrText.set(num, data.text || "");
+    ocrDiv._words = data.words || [];
+    ocrDone.add(num);
+    badge.remove();
+    setOcrStatus("");
+    buildOcrLayer(num, canvas, ocrDiv);
+  }
+
+  function buildOcrLayer(num, canvas, ocrDiv) {
+    if (ocrDiv.dataset.built === "1") return;
+    const words = ocrDiv._words || [];
+    const cssW = parseFloat(canvas.style.width) || canvas.width;
+    const cssH = parseFloat(canvas.style.height) || canvas.height;
+    const sx = cssW / canvas.width;
+    const sy = cssH / canvas.height;
+    const frag = document.createDocumentFragment();
+    words.forEach((w) => {
+      if (!w.t || !w.t.trim()) return;
+      const s = document.createElement("span");
+      s.className = "ocr-word";
+      s.textContent = w.t;
+      s.dataset.word = w.t;
+      s.style.left = w.x0 * sx + "px";
+      s.style.top = w.y0 * sy + "px";
+      s.style.width = Math.max(2, (w.x1 - w.x0) * sx) + "px";
+      s.style.height = Math.max(2, (w.y1 - w.y0) * sy) + "px";
+      frag.appendChild(s);
+    });
+    ocrDiv.appendChild(frag);
+    ocrDiv.dataset.built = "1";
   }
 
   function clearRendered() {
@@ -212,11 +312,6 @@
     return (t || "").replace(/[^\p{L}\p{M}'’-]/gu, "").toLowerCase();
   }
 
-  function getPageText(wrap) {
-    const spans = wrap.querySelectorAll(".textLayer > span");
-    return [...spans].map((s) => s.textContent).join(" ").replace(/\s+/g, " ");
-  }
-
   function sentenceAround(pageText, word) {
     const w = cleanWord(word);
     if (!w) return pageText.slice(0, 200);
@@ -278,17 +373,17 @@
   }
 
   viewport.addEventListener("click", (e) => {
-    const span = e.target.closest(".textLayer > span");
+    const span = e.target.closest(".ocr-word");
     if (!span) return;
     const wrap = span.closest(".page-wrap");
     if (!wrap) return;
-    const word = span.textContent.trim();
+    const word = span.dataset.word || span.textContent.trim();
     if (!cleanWord(word)) return;
-    openPopup(word, getPageText(wrap), e.clientX, e.clientY);
+    openPopup(word, ocrText.get(parseInt(wrap.dataset.page, 10)) || "", e.clientX, e.clientY);
   });
   $("mpClose").addEventListener("click", () => popup.classList.add("hidden"));
   document.addEventListener("click", (e) => {
-    if (!popup.contains(e.target) && !e.target.closest(".textLayer > span")) popup.classList.add("hidden");
+    if (!popup.contains(e.target) && !e.target.closest(".ocr-word")) popup.classList.add("hidden");
   });
 
   /* ---------- storage + export ---------- */

@@ -98,16 +98,29 @@ html, body {
   box-shadow: 0 2px 12px rgba(0,0,0,0.4);
 }
 .page-wrap canvas { display: block; }
-.textLayer {
+/* OCR clickable word layer (PDF is image-only, so we OCR each page) */
+.ocr-layer {
   position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  overflow: hidden; opacity: 0.25; line-height: 1;
+  overflow: hidden;
 }
-.textLayer > span {
-  color: transparent; position: absolute; white-space: pre;
-  cursor: pointer; transform-origin: 0 0;
+.ocr-word {
+  position: absolute;
+  color: transparent;
+  cursor: pointer;
+  white-space: pre;
+  border-radius: 3px;
 }
-.textLayer > span::selection { background: rgba(255, 56, 92, 0.35); }
-.textLayer:hover { opacity: 0.4; }
+.ocr-word:hover { background: rgba(255, 56, 92, 0.28); }
+.ocr-word::selection { background: rgba(255, 56, 92, 0.4); }
+.ocr-badge {
+  position: absolute; top: 8px; right: 8px; z-index: 5;
+  background: rgba(34,34,34,0.82); color: #fff;
+  font-size: 11px; padding: 4px 10px; border-radius: 999px;
+}
+.ocr-status {
+  font-size: 12px; color: var(--rausch-deep); font-weight: 600;
+  min-width: 90px;
+}
 
 /* ---------- Side pane ---------- */
 .side-pane { display: flex; flex-direction: column; gap: 16px; overflow: auto; }
