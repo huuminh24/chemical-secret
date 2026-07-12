@@ -400,6 +400,17 @@
     toastTimer = setTimeout(() => el.classList.add("hidden"), 2200);
   }
 
+  /* ---------- robust fit-to-width (override form restoration) ---------- */
+  fitWidth.checked = true;
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    if (!fitWidth.checked) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(clearRendered, 200);
+  });
+  // Re-fit once layout + pdf.js are fully ready (avoids early wrong measurement)
+  window.addEventListener("load", () => { if (fitWidth.checked) clearRendered(); });
+
   /* =========================================================
      BOOT — auto open PDF + audio (per request)
      ========================================================= */
